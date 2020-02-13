@@ -2,10 +2,10 @@ CC = gcc # compiler
 CFLAGS = -Wall -g # compile flags
 LIBS = # libs
 
-SRCS = sched.c # source files
+SRCS = averagingTool.c # source files
 OBJS = $(SRCS:.c=.o) # object files
 
-TARG = sched # target
+TARG = averagingTool # target
 
 all: $(TARG)
 # generates the target executable
