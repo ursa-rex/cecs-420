@@ -1,0 +1,3 @@
+map /home/james/Desktop/CECS 420/Projects/cecs-420/project3/searchdir/A
+map /home/james/Desktop/CECS 420/Projects/cecs-420/project3/searchdir/B
+map /home/james/Desktop/CECS 420/Projects/cecs-420/project3/searchdir

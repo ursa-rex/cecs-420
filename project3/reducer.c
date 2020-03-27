@@ -26,28 +26,60 @@ typedef struct List {
     struct Node* tail;
 } List;
 
-// Struct to hold arguments for thread functions
-typedef struct threadArgs {
-    int msgid;
-    char* filename;
-    List* list;
-} threadArgs;
-
+void message();
 void read_msq();
 List* createList();
 void addToList(List*, Node*);
 Node* removeFromList(List*);
 Node* createNode(char*);
 
-typedef sem_t Semaphore;
-Semaphore mutex;
-Semaphore full;
-Semaphore empty;
+typedef struct my_msgbuf {
+    long mtype;
+    char mtext[200];
+} My_msgbuf;
+
+void message()
+{
+    struct my_msgbuf buf;
+    int msqid;
+    key_t key;
+
+    if ((key = ftok("mapper.c", 1)) == -1) {
+        perror("ftok");
+        exit(1);
+    }
+
+    if ((msqid = msgget(key, 0666 | IPC_CREAT)) == -1) {
+        perror("msgget");
+        exit(1);
+    }
+    
+    printf("Enter lines of text, ^D to quit:\n");
+
+    buf.mtype = 1; /* we don't really care in this case */
+
+    while(fgets(buf.mtext, sizeof buf.mtext, stdin) != NULL) {
+        int len = strlen(buf.mtext);
+
+        /* ditch newline at end, if it exists */
+        if (buf.mtext[len-1] == '\n') buf.mtext[len-1] = '\0';
+
+        if (msgsnd(msqid, &buf, len+1, 0) == -1) /* +1 for '\0' */
+            perror("msgsnd");
+    }
+
+    if (msgctl(msqid, IPC_RMID, NULL) == -1) {
+        perror("msgctl");
+        exit(1);
+    }
+}
 
 int main(int argc, char* argv[])
 {
-    FILE *file = fopen(argv[2], "w");
+    FILE *file = fopen(argv[1], "w");
     List *linkedList = createList();
+
+    message();
 
     read_msq(file, linkedList);
 
@@ -104,22 +136,13 @@ void read_msq(FILE *file, List *list){
     key_t key;
 
     //Same key as mapper
-    if ((key = ftok("mapper.c", 1) == -1)) {         
-        perror("ftok");
-        exit(1);
-    }
+    key = ftok("mapper.c", 1);
 
     //connect to queue
-    if ((msqid = msgget(key, 0666)) == -1) {
-        perror("msgget");
-        exit(1);
-    }
+    msqid = msgget(key, 0666);
 
-    for(;;) {
-        if (msgrcv(msqid, &list, sizeof list->head, 0, 0) == -1) {
-            perror("msgrcv");
-            exit(1);
-        }
+    while(msgrcv(msqid, &list, sizeof list->head, 0, 0) == -1) {
+        addToList(list, list->head);
         fprintf(file, " %s \n", list->head->word);    
     }
 }
