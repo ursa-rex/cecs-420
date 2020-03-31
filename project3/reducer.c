@@ -20,70 +20,45 @@ typedef struct Node {
     struct Node* nextNode;
 } Node;
 
-// Buffer for message queue
+// List
 typedef struct List {
     struct Node* head;
     struct Node* tail;
 } List;
 
-void message();
-void read_msq();
+typedef struct Message {
+    long type;
+    char text[256];
+} Message;
+
 List* createList();
-void addToList(List*, Node*);
-Node* removeFromList(List*);
 Node* createNode(char*);
-
-typedef struct my_msgbuf {
-    long mtype;
-    char mtext[200];
-} My_msgbuf;
-
-void message()
-{
-    struct my_msgbuf buf;
-    int msqid;
-    key_t key;
-
-    if ((key = ftok("mapper.c", 1)) == -1) {
-        perror("ftok");
-        exit(1);
-    }
-
-    if ((msqid = msgget(key, 0666 | IPC_CREAT)) == -1) {
-        perror("msgget");
-        exit(1);
-    }
-    
-    printf("Enter lines of text, ^D to quit:\n");
-
-    buf.mtype = 1; /* we don't really care in this case */
-
-    while(fgets(buf.mtext, sizeof buf.mtext, stdin) != NULL) {
-        int len = strlen(buf.mtext);
-
-        /* ditch newline at end, if it exists */
-        if (buf.mtext[len-1] == '\n') buf.mtext[len-1] = '\0';
-
-        if (msgsnd(msqid, &buf, len+1, 0) == -1) /* +1 for '\0' */
-            perror("msgsnd");
-    }
-
-    if (msgctl(msqid, IPC_RMID, NULL) == -1) {
-        perror("msgctl");
-        exit(1);
-    }
-}
+void append(List*, char*);
+void printList(List*, FILE*);
+void readMsg(Message*);
 
 int main(int argc, char* argv[])
 {
     FILE *file = fopen(argv[1], "w");
-    List *linkedList = createList();
+    List *list = createList();
 
-    message();
+    Message message;
+    int msgid;
+    key_t key;
 
-    read_msq(file, linkedList);
+    key = ftok("mapper.c", 1);
+    msgid = msgget(key, 0666 | IPC_CREAT);
 
-    fclose(file);
+    while(msgrcv(msgid, &message, sizeof(Message), 0, 0) != -1){
+        if(message.type == 1){
+            append(list, message.text);
+        } else {
+            msgctl(msgid, IPC_RMID, NULL);
+            fclose(file);
+        }
+    }
+    printList(list, file);
+    printf("End of msg queue\n");
 
     return 0;
 }
@@ -95,54 +70,47 @@ List* createList() {
     return list;
 }
 
-void addToList(List* l, Node* n){
-    Node* tempNode = l->head;
+void append(List* list, char* msg) {
+    char token[] = ":";
+    char* word = strtok(msg, token);
+
+    printf("%s\n", word);
+
+    Node* tempNode = list->head;
     while(tempNode != NULL){
-        if(strcmp(tempNode->word, n->word) == 0) {
+        if(strcmp(tempNode->word, word) == 0) {
             tempNode->count++;
-            free(n);
+            // printf("%d\n", tempNode->count);
             return;
         } else {
             tempNode = tempNode->nextNode;
         }
     }
-    tempNode = n;
-    if(l->head == NULL) {
-        l->head = tempNode;
-        l->tail = tempNode;
-    } else {
-        l->tail->nextNode = tempNode;
-        l->tail = tempNode;
+    tempNode = createNode(word);
+    if(list->head == NULL) {                              // Check for empty list
+        list->head = tempNode;
+        list->tail = tempNode;
+    } else {                                              // Add item to end and rename tail
+        list->tail->nextNode = tempNode;
+        list->tail = tempNode;
     }
 }
 
-Node* removeFromList(List* l) {
-    Node* tempNode = l->head;
-    l->head = l->head->nextNode;
-    return tempNode;
+void printList(List *list, FILE *file) //prints out list
+{
+    Node *node = list->head;
+    while(node != NULL)
+    {
+        printf("%s:%d", node->word, node->count);
+        // fprintf(file, "%s:%d", node->word, node->count); //print list to file until EOF
+        node = node->nextNode;
+    }
 }
 
-Node* createNode(char* word) {
+Node* createNode(char *newWord) {
     Node* newNode = malloc(sizeof(Node));
-    newNode->word = word;
+    newNode->word = newWord;
     newNode->nextNode = NULL;
     newNode->count = 1;
     return newNode;
-}
-
-//Read message queue
-void read_msq(FILE *file, List *list){
-    int msqid;
-    key_t key;
-
-    //Same key as mapper
-    key = ftok("mapper.c", 1);
-
-    //connect to queue
-    msqid = msgget(key, 0666);
-
-    while(msgrcv(msqid, &list, sizeof list->head, 0, 0) == -1) {
-        addToList(list, list->head);
-        fprintf(file, " %s \n", list->head->word);    
-    }
 }

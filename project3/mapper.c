@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <unistd.h>
@@ -26,8 +27,8 @@ typedef struct Buffer {
 } Buffer;
 
 typedef struct Message {
-    char text[256];
     long type;
+    char text[256];
 } Message;
 
 // Struct to hold arguments for thread functions
@@ -41,12 +42,12 @@ void runCmd(FILE*);
 Buffer* createBuffer();
 void destroyBuffer(Buffer*);
 Node* createNode(char*);
-void map(char*);
+void map(char*,int);
 void* worker(void*);
 void sender(int);
 void addToBuffer(Buffer*, char*);
 void removeFromBuffer(Buffer*);
-Message* writeMessage(char*,int);
+Message writeMessage(char*,int,int);
 
 // Global initialization
 Semaphore mutex;
@@ -54,7 +55,8 @@ Semaphore full;
 Semaphore empty;
 Buffer* buffer;
 int threads = 0;
-int children;
+int children = 0;
+int status = 0;
 
 int main(int argc, char* argv[]) {
 
@@ -67,11 +69,10 @@ int main(int argc, char* argv[]) {
     // Run commandFile
     FILE* file = fopen(argv[1], "r");
     if(file == NULL){
-        printf("File cannot be opened...\n");
+        printf("File cannot be opened....\n");
     } else {
         runCmd(file);
     }
-    fclose(file);
 
     // Cleanup
     sem_destroy(&mutex);
@@ -82,17 +83,33 @@ int main(int argc, char* argv[]) {
 
 // Read commandFile and call map
 void runCmd(FILE* cmdFile) {
-    int x;
+    int cpid;
     char* cmd;
     char dir[MAXLINESIZE];
+    char flagMsg[MAXWORDSIZE];
+    Message flag;
+
+    // Initializing message queue, buffer, thread arguements
+    key_t key;
+    int msgid;
+    key = ftok("mapper.c", 1);
+    msgid = msgget(key, 0666 | IPC_CREAT); // <-- This id is needed to reference message queue
+
     while(fscanf(cmdFile, "%ms %s", &cmd, dir) != EOF){
         if(strcmp(cmd, "map") == 0) {
-            x = fork();
-            if( x == 0 ) {
-                map(dir);
+            cpid = fork();
+            if( cpid == 0 ) {
+                children++;
+                map(dir, msgid);
             }
         }
     }
+    fclose(cmdFile);
+    
+    while(status != children);
+    // strcpy(flagMsg, "/DONE/");
+    // flag = writeMessage(flagMsg, -1, 0);
+    // msgsnd(msgid, &flag, sizeof(char[128]), 0);
 }
 
 Buffer* createBuffer() {
@@ -142,17 +159,15 @@ void destroyBuffer(Buffer* b){
     free(b);
 }
 
-Message* writeMessage(char* word, int count){
+Message writeMessage(char* word, int count, int type){
     char strCount[3];
-    snprintf(strCount, 10, " %d", count);
+    snprintf(strCount, 10, ":%d", count);
     char* text = strcat(word, strCount);
 
-    Message* message = malloc(sizeof(Message));
-    strcpy(message->text, text);
-    message->type = 1;
+    Message message;
+    strcpy(message.text, text);
+    message.type = type;
 
-    // free(text);
-    free(message);
     return message;
 }
 
@@ -184,42 +199,30 @@ void* worker(void* args) {
 // Thread function to scan nodes from buffer into message queue
 void sender(int msgid) {
     Node* tempNode;
-    Message* msg;
+    Message msg;
     do{
         sem_wait(&full);
         sem_wait(&mutex);
 
         // remove from buffer
         tempNode = buffer->head;
-        msg = writeMessage(tempNode->word, tempNode->count);
+        msg = writeMessage(tempNode->word, tempNode->count, 1);
         removeFromBuffer(buffer);
 
         sem_post(&mutex);
         sem_post(&empty);
 
         // send
-        msgsnd(msgid, &msg, sizeof(msg), 0);
-
+        msgsnd(msgid, &msg, sizeof(msg.text), 0);
     } while(buffer->head != NULL || threads > 0);
-
-    msg = writeMessage("done", -1);
-    msgsnd(msgid, &msg, sizeof(msg), 0);
+    status++;
     exit(0);
 }
 
-void map(char* directoryPath) {
-
-    // Initializing message queue, buffer, thread arguements
-    key_t key;
-    int msgid;
-    key = ftok("mapper.c", 1);
-    msgid = msgget(key, 0666 | IPC_CREAT); // <-- This id is needed to reference message queue
-
+void map(char* directoryPath, int msgid) {
     DIR* dir = opendir(directoryPath);
     struct dirent* entry;
     buffer = createBuffer();
-    threadArgs* args = malloc(sizeof(threadArgs));
-    args->filename = NULL;
 
     // Thread creation
     if(dir == NULL) {
@@ -228,6 +231,8 @@ void map(char* directoryPath) {
     } else {
         while((entry = readdir(dir)) != NULL) {
             if(entry->d_type != DT_DIR) {
+                threadArgs* args = malloc(sizeof(threadArgs));
+                args->filename = NULL;
                 args->filename = malloc(sizeof(char) * (strlen(directoryPath) + strlen(entry->d_name) + 2));
                 args->filename = strcat(strcat(strcpy(args->filename, directoryPath), "/"), entry->d_name);
                 pthread_t thread;
@@ -235,11 +240,11 @@ void map(char* directoryPath) {
                 threads++;
             }
         }
+        // free(entry);
+        // free(args);
         sender(msgid);
     }
-
     closedir(dir);
     destroyBuffer(buffer);
-    free(entry);
-    free(args);
+    return;
 }
